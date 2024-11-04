@@ -1,11 +1,18 @@
 import numpy as np
 import cv2
-from os.path import join, isdir
+from os.path import join, isdir, basename, splitext  # make sure to import splitext
 from os import listdir, mkdir
 from tqdm import tqdm
 from filter import GroundNormalFilterIEKF
 from visualizer import Visualization
 import argparse
+
+
+def add_image_ids(input_file, output_file):
+    """Add image IDs (line numbers) at the start of each line of a pose file."""
+    with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
+        for idx, line in enumerate(infile, start=1):
+            outfile.write(f"{idx+1} {line}")
 
 
 def invT(transform):
@@ -74,6 +81,8 @@ if __name__ == "__main__":
     parser.add_argument("--output_root", type=str, default="results")
     args = parser.parse_args()
 
+    print("parsed!")
+
     # create output dir
     if not isdir(args.output_root):
         mkdir(args.output_root)
@@ -84,25 +93,53 @@ if __name__ == "__main__":
     # read poses
     sequence = args.sequence
     pose_file = join(args.pose_root, f"{sequence}.txt")
+
+    # Check if the pose file has 12 or 13 values per line
+    with open(pose_file, 'r') as f:
+        first_line = f.readline().strip().split()
+    
+    if len(first_line) == 12:
+        print("Pose file has 12 values per line. Adding image IDs...")
+        # Create a new filename by appending "_with_ids" to the original file name
+        corrected_pose_file = join(args.pose_root, f"{splitext(basename(pose_file))[0]}_with_ids.txt")
+        add_image_ids(pose_file, corrected_pose_file)
+        pose_file = corrected_pose_file  # Use the corrected file
+
+    # Proceed with reading the pose file
     image_ids, relative_transforms = read_kitti_pose(pose_file)
 
-    # prepare image list
-    image_dir = join(args.kitti_root, sequence, "image_2")
-    image_list = listdir(image_dir)
-    image_list.sort()
+    # print(relative_transforms)
 
-    # remove last image
-    image_ids = image_ids[:-1]
-    # image_list start with 000000.png while image_ids start with 1
-    image_list = [image_list[i+1] for i in image_ids]
+    ### ADD THE UPDATED IMAGE LIST PROCESSING CODE HERE ###
+    # Prepare image list
+    image_dir = join(args.kitti_root, sequence, "image_2")
+    image_list = sorted(listdir(image_dir))  # Sort the image list to match sequence order
+
+    # Convert image_ids from 1-based to 0-based indexing
+    image_ids = image_ids - 1
+
+    # Ensure no index exceeds the length of the image list
+    image_ids = image_ids[image_ids < len(image_list)]
+
+    # Filter out images based on image_ids
+    image_list = [image_list[i] for i in image_ids]
+
+    if len(image_list) != len(image_ids):
+        raise ValueError("Mismatch between image list and image IDs.")
 
     # read calibration
     calib_path = join(args.kitti_root, sequence, "calib.txt")
     camera_K = read_kitti_calib(calib_path)
 
+    print(f"Sequence: {sequence}, Total images: {len(image_list)}")
+    print(f"Kitti root: {args.kitti_root}")
+    print(f"Pose root: {args.pose_root}")
+    print(f"Output root: {args.output_root}")
+
     # run
     gnf = GroundNormalFilterIEKF()
     vis = Visualization(K=camera_K, d=None, input_wh=(1241, 376))
+    print("Processing images...")
     for idx, image_file in enumerate(tqdm(image_list)):
         image_path = join(image_dir, image_file)
         relative_so3 = relative_transforms[idx][:3, :3]
